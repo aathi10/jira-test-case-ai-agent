@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test-cases/*.md
+test-cases/*.csv
+test-cases/*.json
+test-cases/*.spec.ts
+!test-cases/.gitkeep
+.env
