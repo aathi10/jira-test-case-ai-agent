@@ -34,6 +34,7 @@ import {
   createSubtask,
   findChildIssue,
   JiraCredentials,
+  resolveAccountId,
   transitionIssue,
 } from './test-case-agent/jira-actions';
 import { readRepoContext } from './test-case-agent/repo-reader';
@@ -286,7 +287,9 @@ async function runWorkflow(
   }
 
   const subtaskSummary = interpolate(wf.subtaskSummaryTemplate, { issueKey });
-  const subtaskKey = await createSubtask(creds, testingTaskKey, subtaskSummary, wf.subtaskDescription, creds.username);
+  // Resolve email → accountId for Jira Cloud before creating the sub-task
+  const assigneeAccountId = await resolveAccountId(creds, creds.username);
+  const subtaskKey = await createSubtask(creds, testingTaskKey, subtaskSummary, wf.subtaskDescription, assigneeAccountId);
   console.log(`  ✅  Sub-task created: ${subtaskKey} (assigned to ${creds.username})`);
   console.log(`  🔗  ${browseUrl(creds.baseUrl, subtaskKey)}`);
 

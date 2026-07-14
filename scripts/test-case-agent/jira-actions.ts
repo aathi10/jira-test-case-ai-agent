@@ -45,6 +45,21 @@ function projectKey(issueKey: string): string {
   return issueKey.split('-')[0];
 }
 
+/**
+ * Resolve a Jira Cloud accountId from an email address.
+ * Falls back to the raw email if the user is not found (e.g. Server/DC).
+ */
+export async function resolveAccountId(creds: JiraCredentials, email: string): Promise<string> {
+  try {
+    const users = await jiraRequest<Array<{ accountId: string; emailAddress: string }>>(
+      creds, 'GET', `/user/search?query=${encodeURIComponent(email)}&maxResults=1`,
+    );
+    return users[0]?.accountId ?? email;
+  } catch {
+    return email; // fallback for Server/DC
+  }
+}
+
 /** Get the issue type ID for "Sub-task" in a project */
 async function getSubtaskTypeId(creds: JiraCredentials, projKey: string): Promise<string> {
   const data = await jiraRequest<{ issueTypes: Array<{ id: string; name: string; subtask: boolean }> }>(
@@ -78,7 +93,9 @@ export async function createSubtask(
         version: 1,
         content: [{ type: 'paragraph', content: [{ type: 'text', text: description }] }],
       },
-      ...(assigneeEmail ? { assignee: { name: assigneeEmail } } : {}),
+      // Jira Cloud requires accountId; Server/DC uses name.
+      // We resolve the accountId from the email via the user search API before creating.
+      ...(assigneeEmail ? { assignee: { accountId: assigneeEmail } } : {}),
     },
   };
   const res = await jiraRequest<{ key: string }>(creds, 'POST', '/issue', body);
