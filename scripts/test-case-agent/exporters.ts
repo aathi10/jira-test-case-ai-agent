@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Test Case Agent — Exporters
-//  Formats: Markdown | CSV | JSON | Playwright .spec.ts
+//  Formats: Markdown | CSV | JSON | Playwright .spec.ts | XLSX
 // ─────────────────────────────────────────────────────────────────────────────
 
+import * as XLSX from 'xlsx';
 import { IssueAnalysis, JiraIssue, TestCase } from './types';
 
 export function formatAsMarkdown(testCases: TestCase[], issue: JiraIssue, analysis: IssueAnalysis): string {
@@ -92,6 +93,80 @@ export function formatAsPlaywright(testCases: TestCase[], issue: JiraIssue): str
   }
   s += `// Made with JIRA Test Case AI Agent\n`;
   return s;
+}
+
+/**
+ * Write test cases to an XLSX workbook buffer.
+ * Sheet 1 — "Test Cases": one row per test case, columns matching the CSV format.
+ * Sheet 2 — "Summary": counts by type and category.
+ */
+export function formatAsXLSX(testCases: TestCase[], issue: JiraIssue, analysis: IssueAnalysis): Buffer {
+  // ── Sheet 1: Test Cases ──────────────────────────────────────────────────
+  const tcRows = testCases.map((t) => ({
+    'Test Case ID':   t.id,
+    'Title':          t.title,
+    'Priority':       t.priority,
+    'Type':           t.type,
+    'Category':       t.category ?? '',
+    'Preconditions':  t.preconditions.join(' | '),
+    'Test Steps':     t.testSteps.map((s) => `${s.stepNumber}. ${s.action} -> ${s.expectedResult}`).join(' | '),
+    'Expected Result': t.expectedResult,
+    'Test Data':      (t.testData ?? []).join(' | '),
+    'Notes':          t.notes ?? '',
+    'Automatable':    t.automatable ? 'Yes' : 'No',
+  }));
+
+  const tcSheet = XLSX.utils.json_to_sheet(tcRows);
+
+  // Column widths
+  tcSheet['!cols'] = [
+    { wch: 22 },  // Test Case ID
+    { wch: 55 },  // Title
+    { wch: 10 },  // Priority
+    { wch: 14 },  // Type
+    { wch: 22 },  // Category
+    { wch: 50 },  // Preconditions
+    { wch: 80 },  // Test Steps
+    { wch: 55 },  // Expected Result
+    { wch: 40 },  // Test Data
+    { wch: 40 },  // Notes
+    { wch: 12 },  // Automatable
+  ];
+
+  // ── Sheet 2: Summary ─────────────────────────────────────────────────────
+  const byType: Record<string, number> = {};
+  const byCat:  Record<string, number> = {};
+  for (const t of testCases) {
+    byType[t.type] = (byType[t.type] ?? 0) + 1;
+    byCat[t.category ?? 'General'] = (byCat[t.category ?? 'General'] ?? 0) + 1;
+  }
+
+  const summaryRows = [
+    { Field: 'Issue',       Value: issue.key },
+    { Field: 'Summary',     Value: issue.summary },
+    { Field: 'Type',        Value: issue.issueType },
+    { Field: 'Priority',    Value: issue.priority },
+    { Field: 'Status',      Value: issue.status },
+    { Field: 'Complexity',  Value: analysis.complexity },
+    { Field: 'Total TCs',   Value: String(testCases.length) },
+    { Field: 'Generated',   Value: new Date().toISOString() },
+    { Field: '', Value: '' },
+    { Field: '--- By Type ---', Value: '' },
+    ...Object.entries(byType).map(([k, v]) => ({ Field: k, Value: String(v) })),
+    { Field: '', Value: '' },
+    { Field: '--- By Category ---', Value: '' },
+    ...Object.entries(byCat).map(([k, v]) => ({ Field: k, Value: String(v) })),
+  ];
+
+  const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+  summarySheet['!cols'] = [{ wch: 26 }, { wch: 60 }];
+
+  // ── Workbook ──────────────────────────────────────────────────────────────
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, tcSheet, 'Test Cases');
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
 
 // Made with Bob

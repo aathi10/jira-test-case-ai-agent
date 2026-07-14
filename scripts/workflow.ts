@@ -23,7 +23,7 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { analyseIssue } from './test-case-agent/ai-analyzer';
-import { formatAsCSV } from './test-case-agent/exporters';
+import { formatAsCSV, formatAsXLSX } from './test-case-agent/exporters';
 import { fetchFromRestApi } from './test-case-agent/jira-fetcher';
 import { generateTestCases } from './test-case-agent/generator';
 import {
@@ -137,6 +137,13 @@ function writeCsv(content: string, dir: string, issueKey: string): string {
   return filePath;
 }
 
+function writeXlsx(buffer: Buffer, dir: string, issueKey: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${issueKey}-test-cases.xlsx`);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
 function interpolate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
 }
@@ -223,13 +230,16 @@ async function runWorkflow(
     if (g.scenarios.length > 3) console.log(`    … and ${g.scenarios.length - 3} more`);
   }
 
-  // ── Step 5: Generate CSV ───────────────────────────────────────────────────
-  step(5, 'Generate test cases → CSV');
+  // ── Step 5: Generate CSV + XLSX ───────────────────────────────────────────
+  step(5, 'Generate test cases → CSV + XLSX');
   const testCases = generateTestCases(issue, analysis, wf.detailed ?? true);
   const csv = formatAsCSV(testCases);
   const csvPath = writeCsv(csv, wf.outputDir, issueKey);
+  const xlsxBuffer = formatAsXLSX(testCases, issue, analysis);
+  const xlsxPath = writeXlsx(xlsxBuffer, wf.outputDir, issueKey);
   console.log(`  ✅  ${testCases.length} test cases generated`);
-  console.log(`  💾  Saved → ${csvPath}`);
+  console.log(`  💾  CSV  → ${csvPath}`);
+  console.log(`  💾  XLSX → ${xlsxPath}`);
 
   if (dryRun) {
     console.log('\n  ⚠️  --dry-run: skipping JIRA writes (steps 6–8)');
@@ -280,10 +290,12 @@ async function runWorkflow(
   console.log(`  ✅  Sub-task created: ${subtaskKey} (assigned to ${creds.username})`);
   console.log(`  🔗  ${browseUrl(creds.baseUrl, subtaskKey)}`);
 
-  // ── Step 7: Attach CSV to sub-task, then complete it ──────────────────────
-  step(7, `Attach CSV to ${subtaskKey} and mark Done`);
+  // ── Step 7: Attach CSV + XLSX to sub-task, then complete it ──────────────
+  step(7, `Attach CSV + XLSX to ${subtaskKey} and mark Done`);
   const attachment = await attachFile(creds, subtaskKey, csvPath);
   console.log(`  📎  Attached: ${attachment.filename} (${attachment.size} bytes, id=${attachment.id})`);
+  const xlsxAttachment = await attachFile(creds, subtaskKey, xlsxPath);
+  console.log(`  📎  Attached: ${xlsxAttachment.filename} (${xlsxAttachment.size} bytes, id=${xlsxAttachment.id})`);
 
   try {
     const transitionName = wf.doneTransitionName ?? 'Done';
@@ -298,7 +310,7 @@ async function runWorkflow(
   // ── Step 8: Comment on the Testing task (not the Epic) ────────────────────
   step(8, `Add comment on Testing task ${testingTaskKey}`);
   const commentText = interpolate(wf.commentTemplate, {
-    filename: attachment.filename,
+    filename: `${attachment.filename}, ${xlsxAttachment.filename}`,
     count: String(testCases.length),
     complexity: analysis.complexity,
     types: analysis.suggestedTypes.join(', '),
