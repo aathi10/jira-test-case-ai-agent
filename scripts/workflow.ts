@@ -276,8 +276,8 @@ async function runWorkflow(
   }
 
   const subtaskSummary = interpolate(wf.subtaskSummaryTemplate, { issueKey });
-  const subtaskKey = await createSubtask(creds, testingTaskKey, subtaskSummary, wf.subtaskDescription);
-  console.log(`  ✅  Sub-task created: ${subtaskKey}`);
+  const subtaskKey = await createSubtask(creds, testingTaskKey, subtaskSummary, wf.subtaskDescription, creds.username);
+  console.log(`  ✅  Sub-task created: ${subtaskKey} (assigned to ${creds.username})`);
   console.log(`  🔗  ${browseUrl(creds.baseUrl, subtaskKey)}`);
 
   // ── Step 7: Attach CSV to sub-task, then complete it ──────────────────────

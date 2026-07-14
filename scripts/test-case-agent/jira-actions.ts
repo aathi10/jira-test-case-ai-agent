@@ -63,6 +63,7 @@ export async function createSubtask(
   parentIssueKey: string,
   summary: string,
   description: string,
+  assigneeEmail?: string,
 ): Promise<string> {
   const proj = projectKey(parentIssueKey);
   const subtaskTypeId = await getSubtaskTypeId(creds, proj);
@@ -77,6 +78,7 @@ export async function createSubtask(
         version: 1,
         content: [{ type: 'paragraph', content: [{ type: 'text', text: description }] }],
       },
+      ...(assigneeEmail ? { assignee: { name: assigneeEmail } } : {}),
     },
   };
   const res = await jiraRequest<{ key: string }>(creds, 'POST', '/issue', body);
