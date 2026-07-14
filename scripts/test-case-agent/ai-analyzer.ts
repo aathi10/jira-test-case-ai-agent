@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Test Case Agent — AI Analyzer
 //  Derives test scenarios from JIRA issues following the guiderails in
-//  TEST_CASE_GENERATION_PROMPT_GUIDE.md:
+//  .bob/rules/TEST_CASE_GENERATION_GUIDE.md:
 //
 //  Categories: Functional | Negative | Integration | Performance |
 //              Security | Accessibility | Documentation | Regression
@@ -17,9 +17,12 @@
 //    h) Security hints       → Security
 //    i) Accessibility hints  → Accessibility
 //    j) TODO / comments      → Documentation
+//    k) Repo file content    → targeted code-aware scenarios
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { IssueAnalysis, JiraIssue, RepoContext, ScenarioGroup, TestType } from './types';
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // ─── Keyword banks ────────────────────────────────────────────────────────────
 
@@ -56,20 +59,49 @@ function extractEnvironments(text: string): string[] {
 
 // ─── Scenario extraction ──────────────────────────────────────────────────────
 
-/** Extract bullet/numbered list items and BDD/assertion sentences from text */
+/**
+ * Extract clean "Verify <subject> — <condition>" scenario titles from issue text.
+ *
+ * Rules (from TEST_CASE_GENERATION_GUIDE.md §4 Naming + §6 Test Step Quality):
+ *   - Never use raw Jira bullet text as a title — always synthesise a scenario name.
+ *   - BDD Given/When/Then clauses are converted to "Verify …" form.
+ *   - "verify / ensure / validate / check" assertions are kept as-is (they already
+ *     start with an action verb).
+ *   - Raw bullets that contain NOTE / see / refer / http links are discarded —
+ *     they are implementation notes, not test scenarios.
+ *   - Short fragments (<15 chars) are discarded.
+ *   - Max 50 scenarios returned (deduped).
+ */
 function extractFromText(text: string): string[] {
   if (!text) return [];
+  const NOTE_RE = /^(note|see|refer|http|fyi|e\.g|i\.e)/i;
+  const JUNK_RE = /[<>{}[\]\\|`]/;  // raw code / HTML fragments — not useful as titles
+
   const s: string[] = [];
+
+  // BDD clauses → convert to "Verify …" form
+  for (const bdd of text.match(/(?:When|Then)\s+[^\n.]{15,}[.\n]/gi) ?? []) {
+    const clean = bdd.replace(/^(When|Then)\s+/i, 'Verify ').replace(/[.\n]+$/, '').trim();
+    if (!NOTE_RE.test(clean) && !JUNK_RE.test(clean)) s.push(clean);
+  }
+
+  // Existing "verify/validate/ensure/check/confirm" assertions — keep as-is
+  for (const a of text.match(/(?:verify|ensure|validate|check|confirm|assert)\s+[^.;\n]{15,}/gi) ?? []) {
+    const clean = a.trim().replace(/[.\n]+$/, '');
+    if (!NOTE_RE.test(clean) && !JUNK_RE.test(clean)) s.push(clean);
+  }
+
+  // Bullet / numbered list items — synthesise into "Verify <subject>" titles
   for (const item of text.match(/^[\s]*[-•*\d.]+\s+(.+)/gm) ?? []) {
-    const c = item.replace(/^[\s\-•*\d.]+/, '').trim();
-    if (c.length > 10) s.push(c);
+    const raw = item.replace(/^[\s\-•*\d.]+/, '').trim();
+    // Discard: too short, looks like a note/link, or contains junk chars
+    if (raw.length < 15 || NOTE_RE.test(raw) || JUNK_RE.test(raw)) continue;
+    // If it already starts with a verb, keep it; otherwise prefix "Verify "
+    const startsWithVerb = /^(verify|validate|ensure|check|confirm|test|assert|should|the system|user can|user should)/i.test(raw);
+    const title = startsWithVerb ? raw : `Verify ${raw}`;
+    s.push(title);
   }
-  for (const bdd of text.match(/(?:Given|When|Then)\s+[^\n.]+[.\n]/gi) ?? []) {
-    if (bdd.trim().length > 10) s.push(bdd.trim());
-  }
-  for (const a of text.match(/(?:verify|ensure|validate|check|confirm|test|assert|should)\s+[^.;\n]{10,}/gi) ?? []) {
-    s.push(a.trim());
-  }
+
   return [...new Set(s)].slice(0, 50);
 }
 
@@ -124,9 +156,20 @@ function buildScenarioGroups(issue: JiraIssue, repoContext?: RepoContext): Scena
   const low = fullText.toLowerCase();
   const raw = extractFromText(fullText);
 
+  // Detect roles so we can fan out per-role Functional tests (guiderail §3e)
+  const roles = extractRoles(fullText);
+
   // ── a) What? requirements → Functional ──────────────────────────────────
   add('Functional', 'Functional', `Verify ${issue.summary} — Happy Path`);
   add('Functional', 'Functional', `Verify ${issue.summary} with valid inputs and expected state`);
+
+  // Role fan-out: one Functional TC per detected role for visibility/access tests
+  if (roles.length > 0) {
+    for (const role of roles) {
+      add('Functional', 'Functional', `Verify ${issue.summary} — ${cap(role)} role`);
+    }
+  }
+
   for (const s of raw) {
     if (!NEG_KW.some(k => s.toLowerCase().includes(k))) {
       const cat = assignCategory(s, 'Functional');

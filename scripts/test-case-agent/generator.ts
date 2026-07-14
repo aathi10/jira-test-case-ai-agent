@@ -1,10 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Test Case Agent — Generator
-//  Builds TestCase objects following TEST_CASE_GENERATION_PROMPT_GUIDE.md
+//  Builds TestCase objects following .bob/rules/TEST_CASE_GENERATION_GUIDE.md
 //
 //  Guiderails applied:
 //  - Flat TC-NNN sequence (one counter for all, grouped by category in output)
-//  - Priority: High = core AC / data-loss risk | Medium = edge cases | Low = docs/audit
+//  - Priority: Critical = blocker | High = core AC / data-loss risk | Medium = edge cases | Low = docs/audit
 //  - 4–8 steps per test case: setup → action → verify → side-effects
 //  - Each step: concrete "Action -> Observable expected result"
 //  - Notes include related issue keys + performance targets
@@ -12,7 +12,12 @@
 //           Security | Accessibility | Documentation | Regression
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { IssueAnalysis, JiraIssue, TestCase, TestPriority, TestStep, TestType } from './types';
+import * as fs from 'fs';
+import * as path from 'path';
+import { analyseIssue } from './ai-analyzer';
+import { formatAsCSV, formatAsMarkdown, formatAsXLSX } from './exporters';
+import { fetchFromRestApi } from './jira-fetcher';
+import { IssueAnalysis, JiraIssue, OutputFormat, TestCase, TestPriority, TestStep, TestType } from './types';
 
 const pad = (n: number) => String(n).padStart(3, '0');
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -226,6 +231,62 @@ export function generateTestCases(issue: JiraIssue, analysis: IssueAnalysis, _de
   }
 
   return testCases;
+}
+
+// ─── TestCaseAgentGenerator class ─────────────────────────────────────────────
+//  Thin wrapper used by the CLI entry point in .bob/rules/jira-test-case-generator.ts
+//  and scripts/jira-test-case-generator.ts.
+//
+//  Usage:
+//    const gen = new TestCaseAgentGenerator('PROJ-123', 'csv', undefined, true);
+//    await gen.generate();
+
+export class TestCaseAgentGenerator {
+  constructor(
+    private readonly issueKey: string,
+    private readonly format: OutputFormat = 'csv',
+    private readonly outputPath: string | undefined = undefined,
+    private readonly detailed: boolean = false,
+  ) {}
+
+  async generate(): Promise<void> {
+    console.log(`\n🔍  Fetching ${this.issueKey}…`);
+    const issue = await fetchFromRestApi(this.issueKey);
+    console.log(`  📋  ${issue.key}: ${issue.summary}`);
+
+    const analysis = analyseIssue(issue);
+    const testCases = generateTestCases(issue, analysis, this.detailed);
+
+    const outDir = path.join(process.cwd(), 'test-cases');
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const base = this.outputPath
+      ? path.resolve(this.outputPath).replace(/\.[^.]+$/, '')
+      : path.join(outDir, `${this.issueKey}-test-cases`);
+
+    if (this.format === 'csv' || this.format === 'xlsx') {
+      const csvPath = `${base}.csv`;
+      fs.writeFileSync(csvPath, formatAsCSV(testCases), 'utf-8');
+      console.log(`  💾  CSV  → ${csvPath}`);
+    }
+    if (this.format === 'xlsx') {
+      const xlsxPath = `${base}.xlsx`;
+      fs.writeFileSync(xlsxPath, formatAsXLSX(testCases, issue, analysis));
+      console.log(`  💾  XLSX → ${xlsxPath}`);
+    }
+    if (this.format === 'markdown') {
+      const mdPath = `${base}.md`;
+      fs.writeFileSync(mdPath, formatAsMarkdown(testCases, issue, analysis), 'utf-8');
+      console.log(`  💾  MD   → ${mdPath}`);
+    }
+    if (this.format === 'json') {
+      const jsonPath = `${base}.json`;
+      fs.writeFileSync(jsonPath, JSON.stringify({ issue: { key: issue.key, summary: issue.summary }, generatedAt: new Date().toISOString(), testCases }, null, 2), 'utf-8');
+      console.log(`  💾  JSON → ${jsonPath}`);
+    }
+
+    console.log(`\n✅  ${testCases.length} test cases generated (complexity: ${analysis.complexity})`);
+  }
 }
 
 // Made with Bob

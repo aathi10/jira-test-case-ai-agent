@@ -2,7 +2,7 @@
 //  Test Case Agent — Type definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type OutputFormat = 'markdown' | 'csv' | 'json' | 'playwright';
+export type OutputFormat = 'markdown' | 'csv' | 'json' | 'playwright' | 'xlsx';
 export type TestPriority = 'Critical' | 'High' | 'Medium' | 'Low';
 
 /** A single file read from a code repository */
