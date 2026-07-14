@@ -30,7 +30,6 @@ import {
   addComment,
   attachFile,
   browseUrl,
-  createChildIssue,
   createSubtask,
   findChildIssue,
   JiraCredentials,
@@ -79,6 +78,7 @@ USAGE: npx tsx scripts/workflow.ts <ISSUE_KEY...> [options]
 OPTIONS:
   --config <file>   Path to workflow-config.json  (default: ./workflow-config.json)
   --dry-run         Generate CSV and print steps but do NOT write to JIRA
+                    Issues with no Testing task child are always skipped.
   --help            Show this message
 
 ENV VARS (override config file):
@@ -247,26 +247,23 @@ async function runWorkflow(
     return { issueKey, csvPath, testCaseCount: testCases.length, subtaskKey: '(dry-run)', complexity: analysis.complexity, types: analysis.suggestedTypes };
   }
 
-  // ── Step 6: Resolve (or create) the Testing task ──────────────────────────
-  step(6, `Resolve Testing task under ${issueKey}`);
-  let testingTaskKey: string;
+  // ── Step 6: Find Testing task — skip issue if none exists ─────────────────
+  step(6, `Find Testing task under ${issueKey}`);
   const existingTesting = await findChildIssue(creds, issueKey, 'testing');
-  if (existingTesting) {
-    testingTaskKey = existingTesting.key;
-    console.log(`  🔍  Found existing Testing task: ${testingTaskKey} — "${existingTesting.summary}" [${existingTesting.status}]`);
-    console.log(`  🔗  ${browseUrl(creds.baseUrl, testingTaskKey)}`);
-  } else {
-    console.log(`  ℹ️  No Testing task found under ${issueKey}. Creating one…`);
-    testingTaskKey = await createChildIssue(
-      creds,
+  if (!existingTesting) {
+    console.log(`  ⏭️  No Testing task found under ${issueKey} — skipping (no Jira writes).`);
+    return {
       issueKey,
-      `Testing — ${issue.summary}`,
-      'Testing task for this feature. Test cases are attached as a sub-task.',
-      'Story',
-    );
-    console.log(`  ✅  Testing task created: ${testingTaskKey}`);
-    console.log(`  🔗  ${browseUrl(creds.baseUrl, testingTaskKey)}`);
+      csvPath,
+      testCaseCount: testCases.length,
+      subtaskKey: '(skipped — no testing task)',
+      complexity: analysis.complexity,
+      types: analysis.suggestedTypes,
+    };
   }
+  const testingTaskKey = existingTesting.key;
+  console.log(`  🔍  Found Testing task: ${testingTaskKey} — "${existingTesting.summary}" [${existingTesting.status}]`);
+  console.log(`  🔗  ${browseUrl(creds.baseUrl, testingTaskKey)}`);
 
   // ── Step 6b: Find or skip "Test Case Generation/Preparation" sub-task ─────
   step(6, `Check for existing "Test Case Generation/Preparation" sub-task under ${testingTaskKey}`);
