@@ -257,8 +257,24 @@ async function runWorkflow(
     console.log(`  🔗  ${browseUrl(creds.baseUrl, testingTaskKey)}`);
   }
 
-  // ── Step 6b: Create "Test Case Generation/Preparation" sub-task ───────────
-  step(6, `Create sub-task "Test Case Generation/Preparation" under ${testingTaskKey}`);
+  // ── Step 6b: Find or skip "Test Case Generation/Preparation" sub-task ─────
+  step(6, `Check for existing "Test Case Generation/Preparation" sub-task under ${testingTaskKey}`);
+  const existingSubtask = await findChildIssue(creds, testingTaskKey, 'test case generation');
+  if (existingSubtask) {
+    console.log(`\n  ✅  Test cases already added.`);
+    console.log(`  🔍  Existing sub-task: ${existingSubtask.key} — "${existingSubtask.summary}" [${existingSubtask.status}]`);
+    console.log(`  🔗  ${browseUrl(creds.baseUrl, existingSubtask.key)}`);
+    console.log('\n  ⏭️  Skipping steps 7–8. No changes made to Jira.');
+    return {
+      issueKey,
+      csvPath,
+      testCaseCount: testCases.length,
+      subtaskKey: existingSubtask.key,
+      complexity: analysis.complexity,
+      types: analysis.suggestedTypes,
+    };
+  }
+
   const subtaskSummary = interpolate(wf.subtaskSummaryTemplate, { issueKey });
   const subtaskKey = await createSubtask(creds, testingTaskKey, subtaskSummary, wf.subtaskDescription);
   console.log(`  ✅  Sub-task created: ${subtaskKey}`);
