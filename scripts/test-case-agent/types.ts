@@ -4,15 +4,30 @@
 
 export type OutputFormat = 'markdown' | 'csv' | 'json' | 'playwright';
 export type TestPriority = 'Critical' | 'High' | 'Medium' | 'Low';
+
+/** A single file read from a code repository */
+export interface RepoFile {
+  repo: string;       // e.g. "hybrid-ipaas-ui"
+  path: string;       // e.g. "src/components/AppSwitcher.tsx"
+  url: string;        // GitHub html_url
+  snippet: string;    // first 2000 chars of file content
+}
+
+/** Aggregated context read from repos before test case generation */
+export interface RepoContext {
+  repos: string[];          // repo names that were checked
+  files: RepoFile[];        // changed/relevant files found
+  summary: string;          // human-readable summary for logs
+}
 export type TestType =
   | 'Functional'
-  | 'UI'
-  | 'Integration'
-  | 'Regression'
-  | 'Smoke'
   | 'Negative'
+  | 'Integration'
+  | 'Performance'
   | 'Security'
-  | 'Performance';
+  | 'Accessibility'
+  | 'Documentation'
+  | 'Regression';
 
 export interface TestStep {
   stepNumber: number;
@@ -101,6 +116,40 @@ export interface GeneratorOptions {
   outputPath?: string;
   detailed: boolean;
   withPlaywright: boolean;
+}
+
+export interface RepoConfig {
+  id: string;
+  name: string;
+  url: string;
+  description?: string;
+}
+
+export interface WorkflowConfig {
+  jira: {
+    baseUrl: string;
+    username: string;
+    apiToken: string;
+  };
+  repos: RepoConfig[];
+  workflow: {
+    outputDir: string;
+    subtaskSummaryTemplate: string;
+    subtaskDescription: string;
+    commentTemplate: string;
+    defaultFormat: OutputFormat;
+    detailed: boolean;
+    doneTransitionName?: string;
+  };
+}
+
+export interface WorkflowResult {
+  issueKey: string;
+  csvPath: string;
+  testCaseCount: number;
+  subtaskKey: string;
+  complexity: string;
+  types: string[];
 }
 
 // Made with Bob

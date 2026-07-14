@@ -1,102 +1,230 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Test Case Agent — Generator
-//  Builds TestCase objects from JiraIssue + IssueAnalysis
+//  Builds TestCase objects following TEST_CASE_GENERATION_PROMPT_GUIDE.md
+//
+//  Guiderails applied:
+//  - Flat TC-NNN sequence (one counter for all, grouped by category in output)
+//  - Priority: High = core AC / data-loss risk | Medium = edge cases | Low = docs/audit
+//  - 4–8 steps per test case: setup → action → verify → side-effects
+//  - Each step: concrete "Action -> Observable expected result"
+//  - Notes include related issue keys + performance targets
+//  - Types: Functional | Negative | Integration | Performance |
+//           Security | Accessibility | Documentation | Regression
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { IssueAnalysis, JiraIssue, TestCase, TestPriority, TestStep, TestType } from './types';
 
 const pad = (n: number) => String(n).padStart(3, '0');
-const tc = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const neg = (s: string) => /invalid|error|fail|exception|reject|unauthori|missing|empty|boundary/i.test(s);
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-function mapPrio(p: string): TestPriority {
-  switch (p.toLowerCase()) {
-    case 'critical': case 'blocker': return 'Critical';
-    case 'high': case 'major': return 'High';
-    case 'low': case 'minor': case 'trivial': return 'Low';
-    default: return 'Medium';
+// ─── Priority assignment (guiderail §5) ───────────────────────────────────────
+
+function assignPriority(scenario: string, type: TestType, issuePriority: string): TestPriority {
+  const l = scenario.toLowerCase();
+  // High: core AC / happy-path / data-loss risk
+  if (type === 'Functional' && l.match(/happy path|valid input|core|migration.*happy/)) return 'High';
+  if (l.match(/data loss|corrupt|clean.?up|migration|401|403|unauthori/)) return 'High';
+  if (issuePriority.toLowerCase() === 'critical' || issuePriority.toLowerCase() === 'blocker') return 'Critical';
+  if (issuePriority.toLowerCase() === 'high' || issuePriority.toLowerCase() === 'major') {
+    if (type === 'Functional' || type === 'Integration' || type === 'Negative') return 'High';
+  }
+  // Medium: edge cases, concurrent, partial
+  if (l.match(/edge|boundary|concurrent|partial|incognito|private|cross.browser|feature flag/)) return 'Medium';
+  if (type === 'Performance' || type === 'Accessibility') return 'Medium';
+  // Low: docs, audit trails, future
+  if (type === 'Documentation') return 'Low';
+  if (l.match(/audit|log|readme|comment|todo/)) return 'Low';
+  return 'Medium';
+}
+
+// ─── Step templates (guiderail §6 — min 4 steps, concrete actions) ────────────
+
+function buildSteps(scenario: string, type: TestType, issue: JiraIssue): TestStep[] {
+  const comp = issue.components[0] ?? 'application';
+  const ac = issue.acceptanceCriteria
+    ? issue.acceptanceCriteria.slice(0, 120)
+    : 'Feature behaves as described in the issue';
+
+  switch (type) {
+
+    case 'Functional': return [
+      { stepNumber: 1, action: `Navigate to the ${comp} section / feature entry point`, expectedResult: 'Page/section loads without errors' },
+      { stepNumber: 2, action: `Perform: ${cap(scenario)}`, expectedResult: 'The action is accepted by the system without errors' },
+      { stepNumber: 3, action: 'Verify the outcome matches the acceptance criteria', expectedResult: `Outcome satisfies: ${ac}` },
+      { stepNumber: 4, action: 'Verify no console errors or unexpected warnings appear', expectedResult: 'Browser console is clean; no JS errors' },
+      { stepNumber: 5, action: 'Refresh the page and verify state is persisted', expectedResult: 'State is retained correctly after page reload' },
+    ];
+
+    case 'Negative': return [
+      { stepNumber: 1, action: `Navigate to the ${comp} section / feature entry point`, expectedResult: 'Page loads successfully' },
+      { stepNumber: 2, action: `Attempt: ${cap(scenario)} using invalid/missing/boundary data`, expectedResult: 'System rejects the input or denies the action' },
+      { stepNumber: 3, action: 'Observe the error feedback returned to the user', expectedResult: 'A descriptive, user-friendly error message is displayed' },
+      { stepNumber: 4, action: 'Verify the system state has not been corrupted', expectedResult: 'Data integrity is maintained; no partial writes occurred' },
+      { stepNumber: 5, action: 'Retry with valid data after the failed attempt', expectedResult: 'System accepts the valid input and proceeds normally' },
+    ];
+
+    case 'Integration': return [
+      { stepNumber: 1, action: 'Confirm all dependent services/APIs are running and health checks pass', expectedResult: 'All downstream services respond with HTTP 200' },
+      { stepNumber: 2, action: `Trigger the integration flow: ${cap(scenario)}`, expectedResult: 'Request is dispatched; HTTP 200/201 acknowledged' },
+      { stepNumber: 3, action: 'Verify the request payload matches the API contract', expectedResult: 'Payload contains all required fields in the correct format' },
+      { stepNumber: 4, action: 'Verify data is correctly propagated to the target system', expectedResult: 'Records in source and target systems are consistent' },
+      { stepNumber: 5, action: 'Simulate an integration failure (mock HTTP 500 from downstream)', expectedResult: 'System handles the failure gracefully with retry or fallback logic' },
+      { stepNumber: 6, action: 'Verify error is surfaced to the user appropriately', expectedResult: 'User sees a meaningful error; no data is lost or corrupted' },
+    ];
+
+    case 'Performance': return [
+      { stepNumber: 1, action: `Run baseline performance test for: ${cap(scenario)}`, expectedResult: 'Response time < 2s under normal single-user load' },
+      { stepNumber: 2, action: 'Simulate 50 concurrent users performing the same action simultaneously', expectedResult: 'P95 response time < 5s; error rate < 1%' },
+      { stepNumber: 3, action: 'Monitor server-side CPU, memory, and DB query metrics during load', expectedResult: 'No resource exhaustion; metrics remain within acceptable thresholds' },
+      { stepNumber: 4, action: 'Repeat the test 3 times and compare results for consistency', expectedResult: 'Results are stable; no significant variance between runs' },
+    ];
+
+    case 'Security': return [
+      { stepNumber: 1, action: `Attempt: ${cap(scenario)} as an unauthenticated user`, expectedResult: 'Request is rejected with HTTP 401 Unauthorised' },
+      { stepNumber: 2, action: 'Repeat the attempt with a valid session but insufficient permissions', expectedResult: 'Request is rejected with HTTP 403 Forbidden' },
+      { stepNumber: 3, action: 'Attempt the action using a valid but expired token', expectedResult: 'Session is invalidated; user is prompted to re-authenticate' },
+      { stepNumber: 4, action: 'Verify the API request uses HTTPS (inspect network traffic)', expectedResult: 'All traffic is encrypted; no plain HTTP calls are made' },
+      { stepNumber: 5, action: 'Verify User A cannot access or modify User B\'s data', expectedResult: 'Data isolation is enforced; cross-user access is denied' },
+      { stepNumber: 6, action: 'Verify the denied attempt is recorded in the audit log', expectedResult: 'Audit trail captures timestamp, user ID, and action attempted' },
+    ];
+
+    case 'Accessibility': return [
+      { stepNumber: 1, action: 'Open the feature in Chrome at 1920×1080 with keyboard-only navigation', expectedResult: 'All interactive elements are reachable via Tab key in logical order' },
+      { stepNumber: 2, action: `Navigate to and interact with: ${cap(scenario)} using keyboard only`, expectedResult: 'Action can be completed without a mouse; focus indicators are visible' },
+      { stepNumber: 3, action: 'Enable NVDA (Windows) or VoiceOver (macOS) and navigate the feature', expectedResult: 'Screen reader correctly announces all labels, states, and role changes' },
+      { stepNumber: 4, action: 'Inspect all interactive elements for ARIA attributes using axe DevTools', expectedResult: 'No accessibility violations; all ARIA labels are meaningful and accurate' },
+      { stepNumber: 5, action: 'Verify colour contrast ratio using browser DevTools or Colour Contrast Analyser', expectedResult: 'Contrast ratio ≥ 4.5:1 for normal text (WCAG 2.1 AA)' },
+    ];
+
+    case 'Documentation': return [
+      { stepNumber: 1, action: `Search the codebase for TODO / FIXME comments related to ${issue.key}`, expectedResult: 'No unresolved TODO/FIXME comments remain for this feature' },
+      { stepNumber: 2, action: `Search for deprecated references: ${cap(scenario)}`, expectedResult: 'No deprecated APIs, imports, or patterns remain in the affected files' },
+      { stepNumber: 3, action: 'Review inline code comments for accuracy against current implementation', expectedResult: 'Comments accurately describe the current behaviour' },
+      { stepNumber: 4, action: 'Review README / developer documentation for the affected component', expectedResult: 'Documentation reflects the new implementation and is up to date' },
+    ];
+
+    case 'Regression': return [
+      { stepNumber: 1, action: 'Execute the baseline smoke test suite for all areas affected by this change', expectedResult: 'All existing smoke tests pass without modification' },
+      { stepNumber: 2, action: `Test the previously working behaviour: ${cap(scenario)}`, expectedResult: `Existing functionality is unaffected by changes in ${issue.key}` },
+      { stepNumber: 3, action: 'Run the full regression suite for linked issues', expectedResult: 'No regressions detected; all linked-issue flows behave as before' },
+      { stepNumber: 4, action: 'Compare test results against the last known-good build', expectedResult: 'Result delta is zero; no new failures introduced' },
+    ];
   }
 }
 
-function steps(scenario: string, type: TestType, issue: JiraIssue): TestStep[] {
+// ─── Test data per type ────────────────────────────────────────────────────────
+
+function buildTestData(scenario: string, type: TestType, issue: JiraIssue): string[] {
   switch (type) {
     case 'Negative': return [
-      { stepNumber: 1, action: 'Navigate to the relevant page/feature', expectedResult: 'Page loads successfully' },
-      { stepNumber: 2, action: `Attempt: ${tc(scenario)} using invalid/missing data`, expectedResult: 'System rejects the input or denies the action' },
-      { stepNumber: 3, action: 'Observe the error feedback', expectedResult: 'A descriptive, user-friendly error message is displayed' },
-      { stepNumber: 4, action: 'Verify the system state has not been corrupted', expectedResult: 'Data integrity is maintained; no partial writes occurred' },
-    ];
-    case 'UI': return [
-      { stepNumber: 1, action: 'Open the application in a supported browser at 1920x1080', expectedResult: 'Page renders correctly' },
-      { stepNumber: 2, action: `Inspect: ${tc(scenario)}`, expectedResult: 'UI elements match design specifications' },
-      { stepNumber: 3, action: 'Resize to 768px (tablet) and 375px (mobile)', expectedResult: 'Layout adapts responsively without overflow' },
-      { stepNumber: 4, action: 'Verify keyboard navigation and screen reader labels', expectedResult: 'Feature meets WCAG 2.1 AA accessibility standards' },
-    ];
-    case 'Integration': return [
-      { stepNumber: 1, action: 'Confirm all dependent services/APIs are running', expectedResult: 'Health checks pass for all integrations' },
-      { stepNumber: 2, action: `Trigger integration flow: ${tc(scenario)}`, expectedResult: 'Request is dispatched and acknowledged' },
-      { stepNumber: 3, action: 'Verify data is correctly propagated across systems', expectedResult: 'Records in source and target systems are consistent' },
-      { stepNumber: 4, action: 'Simulate an integration failure (mock 500)', expectedResult: 'System handles failure gracefully with retry/fallback logic' },
+      'Empty string / null value',
+      'Special characters: <script>alert(1)</script>',
+      'String exceeding max length (>255 chars)',
+      'Numeric field with letters: "abc"',
+      'Boundary value: min−1 and max+1',
     ];
     case 'Security': return [
-      { stepNumber: 1, action: 'Attempt the action as an unauthenticated user', expectedResult: 'Request is rejected with HTTP 401' },
-      { stepNumber: 2, action: `Attempt: ${tc(scenario)} with insufficient privileges`, expectedResult: 'Request is rejected with HTTP 403' },
-      { stepNumber: 3, action: 'Attempt with a valid but expired token', expectedResult: 'Session is invalidated; user prompted to re-authenticate' },
-      { stepNumber: 4, action: 'Verify audit log records the denied attempt', expectedResult: 'Audit trail accurately captures timestamp and user ID' },
-    ];
-    case 'Regression': return [
-      { stepNumber: 1, action: 'Execute the baseline smoke test suite for the affected area', expectedResult: 'All existing smoke tests continue to pass' },
-      { stepNumber: 2, action: `Test previously working behaviour: ${tc(scenario)}`, expectedResult: `Existing functionality unaffected by changes in ${issue.key}` },
-      { stepNumber: 3, action: 'Compare results against the last known-good test run', expectedResult: 'No regressions detected' },
+      'Unauthenticated request (no token)',
+      'Expired JWT token',
+      'Token belonging to a different user (User B\'s token for User A\'s resource)',
+      'Role without required permission',
     ];
     case 'Performance': return [
-      { stepNumber: 1, action: `Run baseline performance test: ${tc(scenario)}`, expectedResult: 'Response time < 2s under normal load' },
-      { stepNumber: 2, action: 'Simulate 50 concurrent users performing the same action', expectedResult: 'P95 response time < 5s; error rate < 1%' },
-      { stepNumber: 3, action: 'Monitor server-side metrics during load', expectedResult: 'No resource exhaustion; system remains stable' },
+      '1 concurrent user (baseline)',
+      '50 concurrent users (load test)',
+      'Response time target: < 500ms (API), < 2s (page load)',
+      'P95 target: < 5s under 50 concurrent users',
     ];
-    default: return [
-      { stepNumber: 1, action: `Navigate to the ${issue.components[0] ?? 'relevant'} section`, expectedResult: 'Page/section loads without errors' },
-      { stepNumber: 2, action: `Perform: ${tc(scenario)}`, expectedResult: 'The action is accepted by the system' },
-      { stepNumber: 3, action: 'Verify the outcome matches the acceptance criteria', expectedResult: issue.acceptanceCriteria ? `Outcome satisfies: ${issue.acceptanceCriteria.slice(0, 120)}` : 'Feature behaves as described in the issue' },
-      { stepNumber: 4, action: 'Check for unexpected side-effects or errors', expectedResult: 'No unexpected errors, warnings, or data corruption' },
+    case 'Integration': return [
+      'Valid request payload per API contract',
+      'Mock HTTP 500 from downstream service',
+      'Mock network timeout (30s)',
+      'Empty response body from API',
     ];
+    case 'Accessibility': return [
+      'Keyboard-only navigation (no mouse)',
+      'NVDA on Windows / VoiceOver on macOS',
+      'axe DevTools accessibility scan',
+      'Colour Contrast Analyser — target 4.5:1',
+    ];
+    default:
+      return [`Valid data as defined in ${issue.key} acceptance criteria`];
   }
 }
 
-function make(issue: JiraIssue, analysis: IssueAnalysis, scenario: string, category: string, counter: number, typeHint?: TestType): TestCase {
-  const isNeg = neg(scenario);
-  const type: TestType = typeHint ?? (isNeg ? 'Negative' : 'Functional');
-  const priority: TestPriority = isNeg ? 'Medium' : mapPrio(issue.priority);
-  const suffix = { Negative: `NEG-${pad(counter)}`, UI: `UI-${pad(counter)}`, Integration: `INT-${pad(counter)}`, Security: `SEC-${pad(counter)}`, Regression: `REG-${pad(counter)}`, Performance: `PERF-${pad(counter)}` }[type] ?? `TC-${pad(counter)}`;
+// ─── Notes builder (guiderail §7) ─────────────────────────────────────────────
+
+function buildNotes(type: TestType, issue: JiraIssue): string {
+  const related = issue.linkedIssues.slice(0, 3).map(l => l.key).join(', ');
+  const base = related ? `Related: ${related}` : `Source: ${issue.key}`;
+  switch (type) {
+    case 'Performance':   return `${base}. Target: API < 500ms, page load < 2s, P95 < 5s under 50 concurrent users`;
+    case 'Security':      return `${base}. Verify HTTPS-only traffic. Check audit log after each denied attempt`;
+    case 'Accessibility': return `${base}. Tools: axe DevTools, NVDA, VoiceOver, Colour Contrast Analyser`;
+    case 'Documentation': return `${base}. Search codebase for TODO/FIXME tied to ${issue.key}`;
+    case 'Regression':    return `${base}. Run after every deployment to verify no regressions`;
+    case 'Integration':   return `${base}. Mock downstream failures using WireMock or equivalent`;
+    default:              return base;
+  }
+}
+
+// ─── Main make() ──────────────────────────────────────────────────────────────
+
+function make(
+  issue: JiraIssue,
+  analysis: IssueAnalysis,
+  scenario: string,
+  category: string,
+  counter: number,
+  type: TestType,
+): TestCase {
+  const priority = assignPriority(scenario, type, issue.priority);
   return {
-    id: `${issue.key}-${suffix}`, title: tc(scenario), priority, type, category,
+    id: `${issue.key}-TC-${pad(counter)}`,
+    title: cap(scenario),
+    priority,
+    type,
+    category,
     preconditions: analysis.derivedPreconditions,
-    testSteps: steps(scenario, type, issue),
-    expectedResult: isNeg ? 'System rejects the invalid input and displays an appropriate error message' : `${tc(scenario)} completes successfully and the outcome matches the acceptance criteria`,
-    testData: isNeg ? ['Empty string', 'Special characters: <script>alert(1)</script>', 'Excessively long strings (>255 chars)', 'Null / undefined values'] : [`Valid data as defined in ${issue.key} acceptance criteria`],
-    notes: `Source: ${issue.key} — ${issue.summary}`,
-    automatable: type !== 'Performance',
-    playwrightHint: type === 'UI' ? `page.locator('[data-testid="..."]')` : undefined,
+    testSteps: buildSteps(scenario, type, issue),
+    expectedResult: type === 'Negative'
+      ? 'System rejects the invalid input and displays an appropriate, user-friendly error message'
+      : `${cap(scenario)} completes successfully and all acceptance criteria are satisfied`,
+    testData: buildTestData(scenario, type, issue),
+    notes: buildNotes(type, issue),
+    automatable: type !== 'Performance' && type !== 'Accessibility' && type !== 'Documentation',
   };
 }
 
-export function generateTestCases(issue: JiraIssue, analysis: IssueAnalysis, detailed: boolean): TestCase[] {
+// ─── Category → TestType mapping ──────────────────────────────────────────────
+
+function inferType(category: string, scenario: string): TestType {
+  const l = scenario.toLowerCase();
+  if (category === 'Security')               return 'Security';
+  if (category === 'Performance')            return 'Performance';
+  if (category === 'Accessibility')          return 'Accessibility';
+  if (category === 'Documentation')          return 'Documentation';
+  if (category === 'Regression')             return 'Regression';
+  if (category === 'Migration' || category === 'API / Integration') return 'Integration';
+  if (category === 'Negative / Error Handling') return 'Negative';
+  if (l.match(/invalid|error|fail|exception|reject|unauthori|missing|empty|boundary|timeout|500|401|403/)) return 'Negative';
+  return 'Functional';
+}
+
+// ─── Public entry point ───────────────────────────────────────────────────────
+
+export function generateTestCases(issue: JiraIssue, analysis: IssueAnalysis, _detailed: boolean): TestCase[] {
   const testCases: TestCase[] = [];
-  const cnt: Record<string, number> = {};
-  const next = (p: string) => { cnt[p] = (cnt[p] ?? 0) + 1; return cnt[p]; };
+  let counter = 0;   // flat TC-NNN sequence across all categories
+
   for (const group of analysis.scenarioGroups) {
     for (const scenario of group.scenarios) {
-      const isNeg = neg(scenario);
-      const th: TestType = isNeg ? 'Negative' : /ui|button|form|layout|display|render/i.test(scenario) ? 'UI' : /api|endpoint|integration|sync/i.test(scenario) ? 'Integration' : /security|permission|role|access/i.test(scenario) ? 'Security' : /regression|existing|previous/i.test(scenario) ? 'Regression' : 'Functional';
-      testCases.push(make(issue, analysis, scenario, group.category, next(th), th));
+      counter++;
+      const type = inferType(group.category, scenario);
+      testCases.push(make(issue, analysis, scenario, group.category, counter, type));
     }
   }
-  if (detailed) {
-    testCases.push(make(issue, analysis, `Verify ${issue.summary} with boundary values (min, max, min-1, max+1)`, 'Edge Cases', next('TC'), 'Functional'));
-    if (analysis.suggestedTypes.includes('Security')) testCases.push(make(issue, analysis, `Verify unauthorised access is denied for ${issue.summary}`, 'Security', next('SEC'), 'Security'));
-    if (analysis.suggestedTypes.includes('Performance')) testCases.push(make(issue, analysis, `Verify ${issue.summary} performance under concurrent load`, 'Performance', next('PERF'), 'Performance'));
-    testCases.push(make(issue, analysis, `Verify existing functionality is not broken by ${issue.summary}`, 'Regression', next('REG'), 'Regression'));
-  }
+
   return testCases;
 }
 

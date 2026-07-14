@@ -45,8 +45,20 @@ export function formatAsMarkdown(testCases: TestCase[], issue: JiraIssue, analys
 
 export function formatAsCSV(testCases: TestCase[]): string {
   const esc = (s: string) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-  const header = ['Test Case ID','Category','Title','Priority','Type','Preconditions','Test Steps','Expected Result','Test Data','Automatable','Notes'].map(esc).join(',');
-  const rows = testCases.map((t) => [t.id, t.category ?? '', t.title, t.priority, t.type, t.preconditions.join(' | '), t.testSteps.map((s) => `${s.stepNumber}. ${s.action} → ${s.expectedResult}`).join(' | '), t.expectedResult, (t.testData ?? []).join(' | '), t.automatable ? 'Yes' : 'No', t.notes ?? ''].map(esc).join(','));
+  // Columns match the requested format:
+  // Test Case ID, Title, Priority, Type, Preconditions, Test Steps, Expected Result, Test Data, Notes
+  const header = ['Test Case ID','Title','Priority','Type','Preconditions','Test Steps','Expected Result','Test Data','Notes'].map(esc).join(',');
+  const rows = testCases.map((t) => [
+    t.id,
+    t.title,
+    t.priority,
+    t.type,
+    t.preconditions.join(' | '),
+    t.testSteps.map((s) => `${s.stepNumber}. ${s.action} -> ${s.expectedResult}`).join(' | '),
+    t.expectedResult,
+    (t.testData ?? []).join(' | '),
+    t.notes ?? '',
+  ].map(esc).join(','));
   return [header, ...rows].join('\n');
 }
 

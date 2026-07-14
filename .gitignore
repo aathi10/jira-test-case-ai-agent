@@ -6,3 +6,8 @@ test-cases/*.json
 test-cases/*.spec.ts
 !test-cases/.gitkeep
 .env
+
+workflow-config.json
+
+# Bob MCP config - contains credentials, never commit the real file
+.bob/mcp.json

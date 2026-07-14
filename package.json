@@ -2,7 +2,12 @@
   "name": "jira-test-case-ai-agent",
   "version": "1.0.0",
   "description": "AI Agent that reads JIRA issues via MCP Atlassian and generates comprehensive manual + Playwright test cases",
+  "bin": {
+    "test-case": "./bin/test-case.js"
+  },
   "scripts": {
+    "workflow": "npx tsx scripts/workflow.ts",
+    "workflow:dry": "npx tsx scripts/workflow.ts --dry-run",
     "agent": "npx tsx scripts/agent.ts",
     "agent:detailed": "npx tsx scripts/agent.ts --detailed",
     "agent:playwright": "npx tsx scripts/agent.ts --detailed --playwright",
@@ -12,6 +17,7 @@
   "author": "Aathiraj P",
   "license": "MIT",
   "dependencies": {
+    "dotenv": "^17.4.2",
     "typescript": "^5.6.2"
   },
   "devDependencies": {
