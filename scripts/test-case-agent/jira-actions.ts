@@ -142,23 +142,33 @@ export async function attachFile(
   return attachments[0];
 }
 
-/** Add a plain-text comment (rendered as ADF paragraph) to an issue */
+/**
+ * Add a rich comment to a JIRA issue.
+ * Supports inline **bold** (wrapped in **...**) and plain text lines.
+ * Empty lines become blank paragraphs (visual spacing in Jira).
+ */
 export async function addComment(
   creds: JiraCredentials,
   issueKey: string,
   text: string,
 ): Promise<void> {
-  const body = {
-    body: {
-      type: 'doc',
-      version: 1,
-      content: text.split('\n').map((line) =>
-        line.trim() === ''
-          ? { type: 'paragraph', content: [] }
-          : { type: 'paragraph', content: [{ type: 'text', text: line }] },
-      ),
-    },
-  };
+  const paragraphs = text.split('\n').map((line) => {
+    if (line.trim() === '') return { type: 'paragraph', content: [] };
+
+    // Parse **bold** segments
+    const content: Array<{ type: string; text: string; marks?: Array<{ type: string }> }> = [];
+    const parts = line.split(/(\*\*[^*]+\*\*)/g);
+    for (const part of parts) {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        content.push({ type: 'text', text: part.slice(2, -2), marks: [{ type: 'strong' }] });
+      } else if (part) {
+        content.push({ type: 'text', text: part });
+      }
+    }
+    return { type: 'paragraph', content };
+  });
+
+  const body = { body: { type: 'doc', version: 1, content: paragraphs } };
   await jiraRequest<void>(creds, 'POST', `/issue/${issueKey}/comment`, body);
 }
 
@@ -208,14 +218,44 @@ export async function findChildIssue(
 ): Promise<{ key: string; summary: string; status: string } | null> {
   const typeClause = issueType ? ` AND issuetype = "${issueType}"` : '';
   const jql = `parent = "${parentKey}"${typeClause} ORDER BY created DESC`;
-  const data = await jiraRequest<{
-    issues: Array<{ key: string; fields: { summary: string; status: { name: string } } }>;
-  }>(creds, 'GET', `/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status&maxResults=50`);
+  try {
+    const data = await jiraRequest<{
+      issues: Array<{ key: string; fields: { summary: string; status: { name: string } } }>;
+    }>(creds, 'GET', `/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status&maxResults=50`);
 
-  const keyword = summaryKeyword.toLowerCase();
-  const match = data.issues.find((i) => i.fields.summary.toLowerCase().includes(keyword));
-  if (!match) return null;
-  return { key: match.key, summary: match.fields.summary, status: match.fields.status.name };
+    const keyword = summaryKeyword.toLowerCase();
+    const match = data.issues.find((i) => i.fields.summary.toLowerCase().includes(keyword));
+    if (!match) return null;
+    return { key: match.key, summary: match.fields.summary, status: match.fields.status.name };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find the Testing / Validation User Story that is a direct child of an Epic.
+ * Tries "testing" first, then "validation" as a fallback (some projects use
+ * "Validation feature for..." instead of "Testing for...").
+ * Returns the first match, or null if not found.
+ */
+export async function findTestingStory(
+  creds: JiraCredentials,
+  epicKey: string,
+): Promise<{ key: string; summary: string; status: string } | null> {
+  const keywords = ['testing', 'validation'];
+  for (const kw of keywords) {
+    const jql = `parent = "${epicKey}" AND summary ~ "${kw}" ORDER BY created DESC`;
+    try {
+      const data = await jiraRequest<{
+        issues: Array<{ key: string; fields: { summary: string; status: { name: string } } }>;
+      }>(creds, 'GET', `/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status&maxResults=20`);
+      if (data.issues.length > 0) {
+        const m = data.issues[0];
+        return { key: m.key, summary: m.fields.summary, status: m.fields.status.name };
+      }
+    } catch { /* try next keyword */ }
+  }
+  return null;
 }
 
 /**

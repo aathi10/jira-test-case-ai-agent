@@ -4,10 +4,18 @@ test-cases/*.md
 test-cases/*.csv
 test-cases/*.json
 test-cases/*.spec.ts
+test-cases/*.xlsx
+test-cases/.bob-instructions/
 !test-cases/.gitkeep
+
 .env
 
+# Contains JIRA + GitHub credentials — never commit the real file
 workflow-config.json
 
-# Bob MCP config - contains credentials, never commit the real file
+# Contains MCP server credentials — never commit the real file
 .bob/mcp.json
+
+# Playwright temp files
+.playwright-mcp/
+confluence-page.html

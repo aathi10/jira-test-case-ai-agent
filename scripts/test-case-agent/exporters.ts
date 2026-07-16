@@ -67,34 +67,6 @@ export function formatAsJSON(testCases: TestCase[], issue: JiraIssue, analysis: 
   return JSON.stringify({ meta: { issueKey: issue.key, summary: issue.summary, issueType: issue.issueType, priority: issue.priority, status: issue.status, complexity: analysis.complexity, suggestedTypes: analysis.suggestedTypes, generatedAt: new Date().toISOString(), totalTestCases: testCases.length }, testCases }, null, 2);
 }
 
-export function formatAsPlaywright(testCases: TestCase[], issue: JiraIssue): string {
-  const auto = testCases.filter((t) => t.automatable !== false);
-  let s = `import { test, expect } from '@playwright/test';\n\n/**\n * AUTO-GENERATED for ${issue.key}: ${issue.summary}\n * Generated: ${new Date().toISOString()}\n */\n\n`;
-  const grouped = new Map<string, TestCase[]>();
-  for (const t of auto) { const c = t.category ?? 'General'; if (!grouped.has(c)) grouped.set(c, []); grouped.get(c)!.push(t); }
-  for (const [cat, cases] of grouped) {
-    s += `test.describe('${issue.key} — ${cat}', () => {\n\n`;
-    for (const t of cases) {
-      s += `  /** ${t.id}: ${t.title} | Priority: ${t.priority} | Type: ${t.type} */\n`;
-      s += `  test('${t.id} — ${t.title.replace(/'/g, "\\'")}'\, async ({ page }) => {\n`;
-      s += `    // Preconditions:\n` + t.preconditions.map((p) => `    //   - ${p}`).join('\n') + '\n\n';
-      for (const step of t.testSteps) {
-        s += `    // Step ${step.stepNumber}: ${step.action}\n`;
-        if (step.stepNumber === 1 && /navigate|open|go to/i.test(step.action)) s += `    await page.goto('/* TODO: URL */')\;\n`;
-        else if (/click|button|press/i.test(step.action)) s += `    await page.getByRole('button', { name: '/* TODO */' }).click()\;\n`;
-        else if (/fill|type|enter|input/i.test(step.action)) s += `    await page.getByLabel('/* TODO */').fill('/* value */')\;\n`;
-        else if (/verify|check|assert|visible|display/i.test(step.action)) s += `    await expect(page.locator('/* TODO */')).toBeVisible()\;\n`;
-        else s += `    // TODO: implement — ${step.action}\n`;
-        s += `    // Expected: ${step.expectedResult}\n\n`;
-      }
-      s += `  });\n\n`;
-    }
-    s += `});\n\n`;
-  }
-  s += `// Made with JIRA Test Case AI Agent\n`;
-  return s;
-}
-
 /**
  * Write test cases to an XLSX workbook buffer.
  * Sheet 1 — "Test Cases": one row per test case, columns matching the CSV format.

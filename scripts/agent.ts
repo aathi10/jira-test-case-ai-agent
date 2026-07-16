@@ -1,111 +1,181 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  Test Case Agent — CLI Runner / Orchestrator
+//  Test Case Agent — CLI Runner
+//
+//  Fetches a JIRA issue, builds the full context, and writes a Bob instruction
+//  file. Bob reads the instruction file and writes the CSV. The CLI can then
+//  convert the CSV to XLSX / Markdown / JSON.
 //
 //  Usage:
-//    npx tsx scripts/agent.ts PROJ-123 [--detailed] [--playwright] [--format csv]
-//    npx tsx scripts/agent.ts PROJ-123 PROJ-124 --detailed
-//    npx tsx scripts/agent.ts --mcp ./mcp-response.json --detailed
+//    npx tsx scripts/agent.ts PROJ-123
+//    npx tsx scripts/agent.ts PROJ-123 PROJ-124 --format xlsx
+//    npx tsx scripts/agent.ts PROJ-123 --from-csv   (convert existing CSV only)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { analyseIssue } from './test-case-agent/ai-analyzer';
-import { formatAsCSV, formatAsJSON, formatAsMarkdown, formatAsPlaywright } from './test-case-agent/exporters';
+import { buildContext } from './test-case-agent/context-builder';
+import { formatAsMarkdown, formatAsXLSX, formatAsJSON } from './test-case-agent/exporters';
 import { fetchFromRestApi, normaliseFromMcp } from './test-case-agent/jira-fetcher';
-import { generateTestCases } from './test-case-agent/generator';
-import { IssueAnalysis, JiraIssue, OutputFormat, TestCase } from './test-case-agent/types';
+import { writeBobInstructionFile, parseCsvToTestCases } from './test-case-agent/generator';
+import { OutputFormat } from './test-case-agent/types';
 
-interface CliArgs { issueKeys: string[]; format: OutputFormat; detailed: boolean; withPlaywright: boolean; outputDir: string; mcpFile?: string; }
+interface CliArgs {
+  issueKeys: string[];
+  format: OutputFormat;
+  outputDir: string;
+  fromCsv: boolean;
+  mcpFile?: string;
+}
 
 function parseArgs(argv: string[]): CliArgs {
   const args = argv.slice(2);
   const issueKeys: string[] = [];
-  let format: OutputFormat = 'markdown', detailed = false, withPlaywright = false, outputDir = 'test-cases';
+  let format: OutputFormat = 'xlsx';
+  let outputDir = 'test-cases';
+  let fromCsv = false;
   let mcpFile: string | undefined;
+
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '--format' && args[i+1]) { format = args[++i] as OutputFormat; }
-    else if (a === '--output' && args[i+1]) { outputDir = args[++i]; }
-    else if (a === '--mcp' && args[i+1]) { mcpFile = args[++i]; }
-    else if (a === '--detailed') detailed = true;
-    else if (a === '--playwright') withPlaywright = true;
+    if ((a === '--format' || a === '-f') && args[i + 1]) { format = args[++i] as OutputFormat; }
+    else if ((a === '--output' || a === '-o') && args[i + 1]) { outputDir = args[++i]; }
+    else if (a === '--mcp' && args[i + 1]) { mcpFile = args[++i]; }
+    else if (a === '--from-csv') { fromCsv = true; }
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
     else if (!a.startsWith('--') && /^[A-Z][A-Z0-9_]+-\d+$/i.test(a)) issueKeys.push(a.toUpperCase());
   }
-  return { issueKeys, format, detailed, withPlaywright, outputDir, mcpFile };
+  return { issueKeys, format, outputDir, fromCsv, mcpFile };
 }
 
 function printHelp(): void {
   console.log(`
-JIRA Test Case AI Agent
+JIRA Test Case Agent — Bob-driven CSV generator
 
 USAGE: npx tsx scripts/agent.ts <ISSUE_KEY...> [options]
 
+WORKFLOW:
+  1. Run without --from-csv → writes a Bob instruction file
+  2. Bob reads the instruction file and writes the CSV
+  3. Run with --from-csv → converts the CSV to XLSX / Markdown / JSON
+
 OPTIONS:
-  --format      markdown | csv | json | playwright  (default: markdown)
-  --detailed    Include edge-case, security, performance, regression tests
-  --playwright  Also emit a Playwright .spec.ts skeleton
-  --output      Output directory  (default: test-cases/)
-  --mcp <file>  Path to a JSON file with a raw MCP JIRA response
-  --help        Show this message
+  --format <fmt>   Output format after CSV conversion: xlsx | markdown | json  (default: xlsx)
+  --output <dir>   Output directory  (default: test-cases/)
+  --from-csv       Skip instruction file; convert existing CSV to other formats
+  --mcp <file>     Path to a raw MCP JIRA JSON response
+  --help           Show this message
 
 ENV VARS: JIRA_BASE_URL  JIRA_USERNAME  JIRA_API_TOKEN
 
 EXAMPLES:
-  npx tsx scripts/agent.ts PROJ-123
-  npx tsx scripts/agent.ts PROJ-123 --detailed --playwright
-  npx tsx scripts/agent.ts PROJ-123 PROJ-124 --format csv
+  npx tsx scripts/agent.ts SCI-17066
+  npx tsx scripts/agent.ts SCI-17066 --from-csv --format xlsx
+  npx tsx scripts/agent.ts SCI-17066 SCI-17067
   npx tsx scripts/agent.ts --mcp ./mcp-response.json
 `);
 }
 
-function writeOut(content: string, dir: string, key: string, suffix: string, ext: string): string {
-  fs.mkdirSync(dir, { recursive: true });
-  const p = path.join(dir, `${key}${suffix}.${ext}`);
-  fs.writeFileSync(p, content, 'utf-8');
-  return p;
-}
-
-function printSummary(issue: JiraIssue, tcs: TestCase[], analysis: IssueAnalysis): void {
-  const byType: Record<string, number> = {};
-  for (const t of tcs) byType[t.type] = (byType[t.type] ?? 0) + 1;
-  console.log(`\n${'-'.repeat(60)}`);
-  console.log(`✅  ${issue.key}: ${issue.summary}`);
-  console.log(`    Priority: ${issue.priority} | Complexity: ${analysis.complexity} | Total: ${tcs.length}`);
-  for (const [type, n] of Object.entries(byType)) console.log(`       ${type.padEnd(15)} ${n}`);
-}
-
 async function processIssue(issueKey: string, opts: CliArgs, mcpRaw?: unknown): Promise<void> {
-  console.log(`\n🔍  Fetching ${issueKey}...`);
+  const outDir = path.resolve(opts.outputDir);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const csvPath = path.join(outDir, `${issueKey}-test-cases.csv`);
+
+  if (opts.fromCsv) {
+    // ── Convert existing CSV → other formats ──────────────────────────────
+    if (!fs.existsSync(csvPath)) {
+      console.error(`  ❌  CSV not found: ${csvPath}`);
+      console.error(`  ℹ️   Run without --from-csv first so Bob can generate the CSV.`);
+      process.exit(1);
+    }
+    console.log(`\n📂  Loading ${issueKey} from existing CSV…`);
+    const issue = mcpRaw ? normaliseFromMcp(mcpRaw) : await fetchFromRestApi(issueKey);
+    const analysis = analyseIssue(issue);
+    const testCases = parseCsvToTestCases(csvPath, issueKey);
+    console.log(`  ✅  ${testCases.length} test cases loaded`);
+    convertCsv(testCases, issue, analysis, opts, outDir, issueKey);
+    return;
+  }
+
+  // ── Fetch + write Bob instruction file ──────────────────────────────────
+  console.log(`\n🔍  Fetching ${issueKey}…`);
   const issue = mcpRaw ? normaliseFromMcp(mcpRaw) : await fetchFromRestApi(issueKey);
-  console.log(`📋  ${issue.key}: ${issue.summary}`);
+  console.log(`  📋  ${issue.key}: ${issue.summary}`);
+
+  const ctx = buildContext(issue);
   const analysis = analyseIssue(issue);
-  console.log(`🤖  ${analysis.scenarioGroups.length} groups | ${analysis.suggestedTypes.join(', ')}`);
-  const tcs = generateTestCases(issue, analysis, opts.detailed);
-  const fmt = opts.format === 'playwright' ? 'markdown' : opts.format;
-  let fp: string;
-  switch (fmt) {
-    case 'csv': fp = writeOut(formatAsCSV(tcs), opts.outputDir, issue.key, '-test-cases', 'csv'); break;
-    case 'json': fp = writeOut(formatAsJSON(tcs, issue, analysis), opts.outputDir, issue.key, '-test-cases', 'json'); break;
-    default: fp = writeOut(formatAsMarkdown(tcs, issue, analysis), opts.outputDir, issue.key, '-test-cases', 'md');
+
+  console.log(`  Complexity : ${analysis.complexity}`);
+  console.log(`  Test types : ${analysis.suggestedTypes.join(', ')}`);
+  console.log(`  Roles      : ${analysis.roles.join(', ') || '(none detected)'}`);
+
+  const instructionPath = writeBobInstructionFile(ctx, csvPath, outDir);
+  console.log(`\n  📝  Bob instruction file → ${instructionPath}`);
+  console.log(`\n  ══════════════════════════════════════════════════════`);
+  console.log(`  BOB: read the instruction file and write the CSV to:`);
+  console.log(`    ${csvPath}`);
+  console.log(`  ══════════════════════════════════════════════════════`);
+  console.log(`\n  After Bob writes the CSV, run:`);
+  console.log(`    npx tsx scripts/agent.ts ${issueKey} --from-csv --format ${opts.format}`);
+
+  // If Bob already wrote the CSV (re-run), auto-convert
+  if (fs.existsSync(csvPath)) {
+    const testCases = parseCsvToTestCases(csvPath, issueKey);
+    if (testCases.length > 0) {
+      console.log(`\n  ✅  CSV already exists — ${testCases.length} test cases loaded`);
+      convertCsv(testCases, issue, analysis, opts, outDir, issueKey);
+    }
   }
-  console.log(`💾  Saved → ${fp}`);
-  if (opts.withPlaywright || opts.format === 'playwright') {
-    const sp = writeOut(formatAsPlaywright(tcs, issue), opts.outputDir, issue.key, '-test-cases.generated', 'spec.ts');
-    console.log(`🎭  Playwright skeleton → ${sp}`);
+}
+
+function convertCsv(
+  testCases: ReturnType<typeof parseCsvToTestCases>,
+  issue: Awaited<ReturnType<typeof fetchFromRestApi>>,
+  analysis: ReturnType<typeof analyseIssue>,
+  opts: CliArgs,
+  outDir: string,
+  issueKey: string,
+): void {
+  const base = path.join(outDir, `${issueKey}-test-cases`);
+  switch (opts.format) {
+    case 'xlsx': {
+      const xlsxPath = `${base}.xlsx`;
+      fs.writeFileSync(xlsxPath, formatAsXLSX(testCases, issue, analysis));
+      console.log(`  💾  XLSX → ${xlsxPath}`);
+      break;
+    }
+    case 'markdown': {
+      const mdPath = `${base}.md`;
+      fs.writeFileSync(mdPath, formatAsMarkdown(testCases, issue, analysis), 'utf-8');
+      console.log(`  💾  MD   → ${mdPath}`);
+      break;
+    }
+    case 'json': {
+      const jsonPath = `${base}.json`;
+      fs.writeFileSync(jsonPath, JSON.stringify(
+        { issue: { key: issue.key, summary: issue.summary }, generatedAt: new Date().toISOString(), testCases },
+        null, 2,
+      ), 'utf-8');
+      console.log(`  💾  JSON → ${jsonPath}`);
+      break;
+    }
   }
-  printSummary(issue, tcs, analysis);
 }
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv);
   if (opts.issueKeys.length === 0 && !opts.mcpFile) { printHelp(); process.exit(1); }
-  console.log(`\n${'='.repeat(54)}\n    JIRA Test Case AI Agent\n${'='.repeat(54)}`);
+
+  console.log(`\n${'='.repeat(54)}\n    JIRA Test Case Agent\n${'='.repeat(54)}`);
+
   if (opts.mcpFile) {
     const raw = JSON.parse(fs.readFileSync(opts.mcpFile, 'utf-8'));
-    await processIssue(opts.issueKeys[0] ?? (raw as Record<string, unknown>).key as string ?? 'UNKNOWN', opts, raw);
+    const key = opts.issueKeys[0] ?? (raw as Record<string, unknown>).key as string ?? 'UNKNOWN';
+    await processIssue(key, opts, raw);
     return;
   }
+
   let failed = 0;
   for (const key of opts.issueKeys) {
     try { await processIssue(key, opts); }

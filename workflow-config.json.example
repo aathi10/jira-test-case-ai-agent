@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy this file to workflow-config.json and fill in your values.",
+  "jira": {
+    "baseUrl": "https://your-org.atlassian.net",
+    "username": "you@example.com",
+    "apiToken": "your_jira_api_token",
+    "_note": "Get your API token from https://id.atlassian.com/manage-profile/security/api-tokens"
+  },
+  "repos": [
+    {
+      "id": "repo1",
+      "name": "UI Repository",
+      "url": "https://github.com/your-org/your-ui-repo",
+      "description": "Frontend / UI product repository"
+    },
+    {
+      "id": "repo2",
+      "name": "Backend Repository",
+      "url": "https://github.com/your-org/your-backend-repo",
+      "description": "Backend / TMS repository"
+    }
+  ],
+  "workflow": {
+    "outputDir": "test-cases",
+    "subtaskSummaryTemplate": "Test Case Generation/Preparation — {issueKey}",
+    "subtaskDescription": "Auto-generated test cases for this release feature. See attached CSV and XLSX files for all test cases.",
+    "assigneeEmail": "you@example.com",
+    "_assigneeNote": "Email of the person to assign the sub-task to. Resolved to accountId for Jira Cloud.",
+    "defaultFormat": "csv",
+    "detailed": true,
+    "doneTransitionName": "Completed",
+    "_doneTransitionNote": "Name of the JIRA transition to mark sub-task done. Use jira_get_transitions to find the correct name."
+  }
+}

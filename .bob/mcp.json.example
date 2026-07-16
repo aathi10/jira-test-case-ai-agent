@@ -1,0 +1,91 @@
+{
+  "_comment": "Copy this file to .bob/mcp.json and fill in your credentials. Never commit the real mcp.json.",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--browser=",
+        "--headless",
+        "--viewport-size="
+      ],
+      "alwaysAllow": []
+    },
+    "atlassian": {
+      "command": "python",
+      "args": [
+        "-m",
+        "uv",
+        "tool",
+        "run",
+        "mcp-atlassian"
+      ],
+      "env": {
+        "JIRA_URL": "https://your-org.atlassian.net",
+        "JIRA_USERNAME": "you@example.com",
+        "JIRA_API_TOKEN": "your_jira_api_token"
+      },
+      "alwaysAllow": [
+        "jira_search_issues",
+        "jira_get_issue",
+        "jira_update_issue",
+        "jira_add_comment",
+        "jira_get_transitions",
+        "jira_transition_issue",
+        "jira_search",
+        "jira_search_fields",
+        "jira_get_field_options",
+        "jira_create_issue_link",
+        "jira_remove_issue_link",
+        "jira_get_all_projects"
+      ]
+    },
+    "git": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-git"
+      ],
+      "alwaysAllow": [
+        "git_status",
+        "git_diff_unstaged",
+        "git_diff_staged",
+        "git_commit",
+        "git_add",
+        "git_reset",
+        "git_log",
+        "git_show"
+      ]
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_github_personal_access_token"
+      },
+      "alwaysAllow": [
+        "create_or_update_file",
+        "search_repositories",
+        "create_repository",
+        "get_file_contents",
+        "push_files",
+        "create_issue",
+        "create_pull_request",
+        "fork_repository",
+        "create_branch",
+        "list_commits",
+        "list_issues",
+        "update_issue",
+        "add_issue_comment",
+        "search_code",
+        "search_issues",
+        "get_issue",
+        "list_pull_requests"
+      ]
+    }
+  }
+}

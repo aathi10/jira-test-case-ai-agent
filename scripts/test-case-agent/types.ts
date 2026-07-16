@@ -13,10 +13,40 @@ export interface RepoFile {
   snippet: string;    // first 2000 chars of file content
 }
 
+/** A single comment or reply on a Jira issue */
+export interface JiraComment {
+  id: string;
+  author: string;
+  body: string;       // plain text (ADF stripped)
+  created: string;    // ISO date string
+}
+
+/** A child issue (subtask or child story) with its own description */
+export interface JiraChildIssue {
+  key: string;
+  summary: string;
+  issueType: string;
+  status: string;
+  description: string;  // plain text description of the child
+  acceptanceCriteria: string;
+}
+
+/** A PR or commit signal from a repo */
+export interface RepoPRSignal {
+  repo: string;
+  number: number;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  url: string;
+  body: string;      // PR description (first 1000 chars)
+}
+
 /** Aggregated context read from repos before test case generation */
 export interface RepoContext {
   repos: string[];          // repo names that were checked
   files: RepoFile[];        // changed/relevant files found
+  prs: RepoPRSignal[];      // open + closed PRs mentioning the issue key
+  commits: string[];        // recent commit messages mentioning the issue key
   summary: string;          // human-readable summary for logs
 }
 export type TestType =
@@ -93,6 +123,10 @@ export interface JiraIssue {
   subtasks: Array<{ key: string; summary: string }>;
   attachmentNames: string[];
   rawFields: Record<string, unknown>;
+  /** Comments + replies fetched from the issue (enriched fetch only) */
+  comments: JiraComment[];
+  /** Full child issue objects with descriptions (enriched fetch only) */
+  childIssues: JiraChildIssue[];
 }
 
 export interface ScenarioGroup {
